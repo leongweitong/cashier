@@ -1,0 +1,421 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>机场收银差额计算器</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 480px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #f5f5f5;
+      color: #222;
+    }
+
+    .panel {
+      background: white;
+      padding: 20px;
+      border-radius: 14px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    }
+
+    h2 {
+      margin-top: 0;
+    }
+
+    label {
+      display: block;
+      margin-top: 16px;
+      font-weight: bold;
+    }
+
+    input {
+      width: 100%;
+      padding: 12px;
+      margin-top: 8px;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      font-size: 16px;
+    }
+
+    button {
+      width: 100%;
+      padding: 13px;
+      margin-top: 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+
+    .calculate {
+      background: #176b43;
+      color: white;
+    }
+
+    .copy {
+      background: #e8e8e8;
+      color: #222;
+    }
+
+    .result {
+      margin-top: 20px;
+      padding: 15px;
+      background: #f0f7f1;
+      border-radius: 10px;
+      line-height: 1.9;
+      overflow-wrap: anywhere;
+    }
+
+    .highlight {
+      font-size: 24px;
+      font-weight: bold;
+      color: #176b43;
+    }
+
+    .entries {
+      margin-top: 18px;
+      padding: 15px;
+      background: #f3f3f3;
+      border-radius: 10px;
+      line-height: 1.9;
+    }
+
+    .entry {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .error {
+      color: #c62828;
+      margin-top: 12px;
+    }
+
+    .note {
+      font-size: 13px;
+      color: #666;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="panel">
+    <h2>机场收银差额计算器</h2>
+
+    <label for="a">机场机器当前金额 (a)</label>
+    <input
+      id="a"
+      type="text"
+      inputmode="decimal"
+      placeholder="例如：8500.25"
+      autocomplete="off"
+    >
+
+    <label for="b">当天总营业额 (b)</label>
+    <input
+      id="b"
+      type="text"
+      inputmode="decimal"
+      placeholder="例如：12000.00"
+      autocomplete="off"
+    >
+
+    <button class="calculate" onclick="calculate()">
+      计算输入金额
+    </button>
+
+    <div id="error" class="error"></div>
+    <div id="result"></div>
+  </div>
+
+  <script>
+    // 税率设置
+    const SERVICE_RATE = 0.10;
+    const GST_RATE = 0.09;
+
+    // 每笔最多 999.00
+    const MAX_ENTRY_CENTS = 99900;
+
+    // 检查金额格式，并转换为整数分
+    // 支持：100、100.5、100.50
+    function parseMoney(value) {
+      const text = value.trim();
+
+      if (!/^\d+(\.\d{1,2})?$/.test(text)) {
+        return null;
+      }
+
+      const amount = Number(text);
+
+      if (!Number.isFinite(amount)) {
+        return null;
+      }
+
+      const cents = Math.round(amount * 100);
+
+      if (!Number.isSafeInteger(cents)) {
+        return null;
+      }
+
+      return cents;
+    }
+
+    // 格式化整数分为两位小数
+    function money(cents) {
+      return (cents / 100).toLocaleString("en-SG", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      });
+    }
+
+    // 计算单笔金额产生的税费
+    // 先计算 10% 服务费，再对小计计算 9% GST
+    function calculateActual(inputCents) {
+      const serviceCents = Math.round(
+        inputCents * SERVICE_RATE
+      );
+
+      const subtotalCents =
+        inputCents + serviceCents;
+
+      const gstCents = Math.round(
+        subtotalCents * GST_RATE
+      );
+
+      return {
+        inputCents,
+        serviceCents,
+        gstCents,
+        actualCents: subtotalCents + gstCents
+      };
+    }
+
+    // 将总输入金额拆分成每笔最多 999.00
+    function splitAmount(totalCents) {
+      const entries = [];
+      let remaining = totalCents;
+
+      while (remaining > 0) {
+        const current = Math.min(
+          MAX_ENTRY_CENTS,
+          remaining
+        );
+
+        entries.push(current);
+        remaining -= current;
+      }
+
+      return entries;
+    }
+
+    // 汇总所有分笔金额和逐笔税费
+    function summarizeEntries(entries) {
+      const totals = {
+        input: 0,
+        service: 0,
+        gst: 0,
+        actual: 0
+      };
+
+      for (const entry of entries) {
+        const item = calculateActual(entry);
+
+        totals.input += item.inputCents;
+        totals.service += item.serviceCents;
+        totals.gst += item.gstCents;
+        totals.actual += item.actualCents;
+      }
+
+      return totals;
+    }
+
+    // 搜索最接近目标差额的输入总金额
+    function findBestEntries(differenceCents) {
+      const estimate = Math.round(
+        differenceCents /
+        ((1 + SERVICE_RATE) * (1 + GST_RATE))
+      );
+
+      // 多笔取整可能产生少量差异，因此搜索估算值附近
+      const estimatedCount = Math.ceil(
+        estimate / MAX_ENTRY_CENTS
+      );
+
+      const radius = 3 * (estimatedCount + 1) + 10;
+
+      let best = null;
+
+      const start = Math.max(0, estimate - radius);
+      const end = estimate + radius;
+
+      for (
+        let candidate = start;
+        candidate <= end;
+        candidate++
+      ) {
+        const entries = splitAmount(candidate);
+        const totals = summarizeEntries(entries);
+
+        const error = Math.abs(
+          differenceCents - totals.actual
+        );
+
+        if (
+          best === null ||
+          error < best.error ||
+          (error === best.error &&
+           candidate < best.candidate)
+        ) {
+          best = {
+            candidate,
+            entries,
+            totals,
+            error
+          };
+        }
+
+        // 已经精确匹配，继续搜索没有必要
+        if (error === 0) {
+          break;
+        }
+      }
+
+      return best;
+    }
+
+    // 主计算程序
+    function calculate() {
+      const aValue = document.getElementById("a").value;
+      const bValue = document.getElementById("b").value;
+
+      const errorElement = document.getElementById("error");
+      const resultElement = document.getElementById("result");
+
+      errorElement.textContent = "";
+      resultElement.innerHTML = "";
+
+      const aCents = parseMoney(aValue);
+      const bCents = parseMoney(bValue);
+
+      if (aCents === null || bCents === null) {
+        errorElement.textContent =
+          "请输入有效金额，最多两位小数，例如 8500.25。";
+        return;
+      }
+
+      const differenceCents = bCents - aCents;
+
+      if (differenceCents < 0) {
+        errorElement.textContent =
+          "机场机器金额已高于总营业额，请检查输入。";
+        return;
+      }
+
+      if (differenceCents === 0) {
+        resultElement.innerHTML =
+          '<div class="result">金额已经相等，无需输入。</div>';
+
+        window.currentEntries = [];
+        return;
+      }
+
+      // 自动计算最合适的分笔清单
+      const best = findBestEntries(differenceCents);
+      const totals = best.totals;
+      const finalAmount = aCents + totals.actual;
+      const remaining = bCents - finalAmount;
+
+      // 显示每笔金额
+      const entriesHtml = best.entries.map(
+        (entry, index) => `
+          <div class="entry">
+            <span>第 ${index + 1} 笔</span>
+            <strong>${money(entry)}</strong>
+          </div>
+        `
+      ).join("");
+
+      resultElement.innerHTML = `
+        <div class="result">
+          <div>营业额差额</div>
+          <div class="highlight">
+            ${money(differenceCents)}
+          </div>
+
+          <hr>
+
+          <div>需要输入的总金额</div>
+          <div class="highlight">
+            ${money(totals.input)}
+          </div>
+
+          <div>10% 服务费：${money(totals.service)}</div>
+          <div>9% GST：${money(totals.gst)}</div>
+
+          <hr>
+
+          <div>实际增加金额：${money(totals.actual)}</div>
+          <div>预计最终机器金额：${money(finalAmount)}</div>
+          <div>剩余差额：${money(remaining)}</div>
+        </div>
+
+        <div class="entries">
+          <strong>分笔输入清单（每笔最多 999.00）</strong>
+          <p>共 ${best.entries.length} 笔</p>
+          ${entriesHtml}
+        </div>
+
+        <button class="copy" onclick="copyEntries()">
+          复制输入清单
+        </button>
+
+        <p class="note">
+          所有金额保留两位小数。服务费和 GST 按每一笔分别取整。
+          实际结果请以机器采用的税额规则为准。
+        </p>
+      `;
+
+      // 保存分笔清单供复制按钮使用
+      window.currentEntries = best.entries;
+    }
+
+    // 复制清单
+    async function copyEntries() {
+      if (!window.currentEntries) return;
+
+      const text = window.currentEntries
+        .map(entry => (entry / 100).toFixed(2))
+        .join("\n");
+
+      try {
+        await navigator.clipboard.writeText(text);
+        alert("输入清单已复制！");
+      } catch (error) {
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        document.body.appendChild(textarea);
+        textarea.select();
+
+        const success = document.execCommand("copy");
+        textarea.remove();
+
+        alert(
+          success
+            ? "输入清单已复制！"
+            : "复制失败，请手动复制清单。"
+        );
+      }
+    }
+  </script>
+</body>
+</html>
